@@ -1,63 +1,89 @@
-import cv2
 import streamlit as st
-import uuid
-import os
+import cv2
+import numpy as np
+from PIL import Image
+import tempfile
 
-# Load the pre-trained Haar Cascade classifier
-face_cascade = cv2.CascadeClassifier('haarcascade_frontalface_default.xml')
+# Configuration de la page
+st.set_page_config(page_title="Détection de visages", layout="centered")
 
+st.title("📸 Détection de visages avec Viola-Jones")
+st.markdown("""
+Bienvenue dans l'application de détection de visages !
 
+**Fonctionnalités :**
+- 📁 Téléversement d’image ou capture 🎥 via webcam
+- 🎨 Couleur personnalisée des rectangles
+- 🔧 Ajustement des paramètres `scaleFactor` et `minNeighbors`
+- 💾 Enregistrement de l’image détectée
+""")
 
-def detect_faces(scaleFactor, minNeighbors, color_bgr):
-    cap = cv2.VideoCapture(0)
-    st.info("Appuyez sur 'q' pour quitter la détection ou 's' pour sauvegarder une image.")
+# Fonction pour convertir une couleur hexadécimale (HTML) en format BGR pour OpenCV
+def hex_to_bgr(hex_color):
+    hex_color = hex_color.lstrip('#')
+    rgb = tuple(int(hex_color[i:i+2], 16) for i in (0, 2 ,4))
+    return rgb[::-1]  # Conversion RGB ➝ BGR
 
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            st.error("Échec de la lecture de la webcam.")
-            break
+# Fonction de détection de visages
+def detect_faces(image_cv, scaleFactor=1.1, minNeighbors=5, color_bgr=(0, 255, 0)):
+    gray = cv2.cvtColor(image_cv, cv2.COLOR_BGR2GRAY)
+    faces = face_cascade.detectMultiScale(gray, scaleFactor=scaleFactor, minNeighbors=minNeighbors)
+    for (x, y, w, h) in faces:
+        cv2.rectangle(image_cv, (x, y), (x+w, y+h), color_bgr, 2)
+    return image_cv, len(faces)
 
-        gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        faces = face_cascade.detectMultiScale(gray, scaleFactor=scaleFactor, minNeighbors=minNeighbors)
+# Charger le classifieur de visages de Viola-Jones
+face_cascade = cv2.CascadeClassifier(cv2.data.haarcascades + 'haarcascade_frontalface_default.xml')
 
-        for (x, y, w, h) in faces:
-            cv2.rectangle(frame, (x, y), (x + w, y + h), color_bgr, 2)
+# Interface : choix de la source
+source = st.radio("📷 Choisissez une source :", ["Téléverser une image", "Utiliser la webcam"])
+color = st.color_picker("🎨 Couleur du rectangle", "#00FF00")
+scaleFactor = st.slider("🔧 scaleFactor", 1.01, 1.5, 1.1, 0.01)
+minNeighbors = st.slider("🔧 minNeighbors", 1, 10, 5)
 
-        cv2.imshow('Détection de visages - Appuyez sur q pour quitter', frame)
+# 📁 Mode téléversement
+if source == "Téléverser une image":
+    uploaded_file = st.file_uploader("📁 Téléversez une image", type=["jpg", "jpeg", "png"])
 
-        key = cv2.waitKey(1) & 0xFF
-        if key == ord('q'):
-            break
-        elif key == ord('s'):
-            filename = f"face_snapshot_{uuid.uuid4().hex[:6]}.png"
-            cv2.imwrite(filename, frame)
-            st.success(f"Image sauvegardée : {filename}")
+    if uploaded_file is not None:
+        image = Image.open(uploaded_file).convert("RGB")
+        image_np = np.array(image)
+        image_cv = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
 
-    cap.release()
-    cv2.destroyAllWindows()
+        if st.button("✅ Détecter les visages", key="detect_button"):
+            result_img, nb_faces = detect_faces(image_cv.copy(), scaleFactor, minNeighbors, hex_to_bgr(color))
+            st.image(cv2.cvtColor(result_img, cv2.COLOR_BGR2RGB), use_column_width=True)
+            st.success(f"🔎 {nb_faces} visage(s) détecté(s).")
 
+            if st.checkbox("💾 Enregistrer l'image détectée"):
+                cv2.imwrite("visages_detectes.jpg", result_img)
+                st.info("✅ Image enregistrée sous 'visages_detectes.jpg'.")
 
-def app():
-    st.title("Détection de visages avec l'algorithme de Viola-Jones")
+# 🎥 Mode webcam
+else:
+    st.markdown("⏺ Cliquez sur **Démarrer la capture** pour activer la webcam.")
+    run = st.checkbox("Démarrer la webcam")
 
-    st.markdown("""
-    ### Instructions:
-    - Cliquez sur le bouton **Detect Faces** pour activer la webcam.
-    - Une fenêtre s'ouvrira affichant la vidéo en temps réel.
-    - Appuyez sur **'q'** pour quitter.
-    - Appuyez sur **'s'** pour sauvegarder une image avec visages détectés.
-    """)
+    FRAME_WINDOW = st.image([])
 
-    color_hex = st.color_picker("Choisissez la couleur des rectangles", "#00FF00")
-    color_bgr = tuple(int(color_hex.lstrip('#')[i:i+2], 16) for i in (4, 2, 0))  # HEX to BGR
+    if run:
+        cap = cv2.VideoCapture(0)
+        if not cap.isOpened():
+            st.error("❌ Webcam non disponible.")
+        else:
+            while run:
+                ret, frame = cap.read()
+                if not ret:
+                    st.error("❌ Erreur de capture vidéo.")
+                    break
 
-    scaleFactor = st.slider("Facteur d'échelle (scaleFactor)", 1.05, 2.0, 1.3, 0.05)
-    minNeighbors = st.slider("Min Neighbors", 1, 10, 5, 1)
+                frame_processed, nb_faces = detect_faces(frame.copy(), scaleFactor, minNeighbors, hex_to_bgr(color))
+                frame_rgb = cv2.cvtColor(frame_processed, cv2.COLOR_BGR2RGB)
+                FRAME_WINDOW.image(frame_rgb)
 
-    if st.button("Detect Faces"):
-        detect_faces(scaleFactor, minNeighbors, color_bgr)
-
-
-if __name__ == "__main__":
-    app()
+                if st.button("📸 Capturer & Enregistrer", key="capture_button"):
+                    with tempfile.NamedTemporaryFile(delete=False, suffix=".jpg") as tmpfile:
+                        cv2.imwrite(tmpfile.name, frame_processed)
+                        st.success(f"✅ Image capturée et enregistrée : {tmpfile.name}")
+                    break
+            cap.release()
